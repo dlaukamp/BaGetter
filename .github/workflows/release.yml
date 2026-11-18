@@ -59,13 +59,23 @@ jobs:
           echo ${{ github.sha }} > artifacts/ReleaseSha.txt
           7z a -tzip bagetter-${{ needs.version.outputs.RELEASE_VERSION }}.zip ./artifacts/*
       - name: Generate changelog with git-cliff
+        id: changelog
+        continue-on-error: true
         uses: tj-actions/git-cliff@v2.2.0
         with:
           args: --latest --strip all
           output: "CHANGELOG.md"
+      - name: Fallback changelog
+        if: steps.changelog.outcome != 'success'
+        run: |
+          echo "# ${{ needs.version.outputs.RELEASE_VERSION }}" > CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "Release ${{ github.ref_name }}." >> CHANGELOG.md
       - name: Create release with ncipollo/release-action
         uses: ncipollo/release-action@v1.14.0
         with:
+          allowUpdates: true
+          replacesArtifacts: false
           bodyFile: "CHANGELOG.md"
           artifacts: "bagetter-${{ needs.version.outputs.RELEASE_VERSION }}.zip"
           name: ${{ needs.version.outputs.RELEASE_VERSION }}
@@ -89,6 +99,7 @@ jobs:
           echo "PackageSource=${PackageSource}" >> $GITHUB_ENV
           dotnet pack --configuration Release --output artifacts --property:Version=${{ needs.version.outputs.RELEASE_VERSION }}
       - name: Push
+        if: ${{ secrets.NUGET_API_KEY != '' }}
         run: dotnet nuget push "*" -s ${PackageSource} -k ${{secrets.NUGET_API_KEY}}
         working-directory: artifacts
 
@@ -100,6 +111,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4.1.1
       - name: Login to Docker Hub
+        id: dockerhub-login
+        if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
         uses: docker/login-action@v3.0.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -115,7 +128,7 @@ jobs:
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: true
+          push: ${{ steps.dockerhub-login.outcome == 'success' }}
           tags: |
             bagetter/bagetter:latest
             bagetter/bagetter:${{ needs.version.outputs.RELEASE_VERSION }}
@@ -125,7 +138,7 @@ jobs:
             Version=${{ needs.version.outputs.RELEASE_VERSION }}
 
   release_helm_chart:
-    if: ${{ github.ref_type == 'tag' }}
+    if: ${{ github.ref_type == 'tag' && github.repository == 'bagetter/BaGetter' }}
     needs: [version, verify]
     name: Release Helm chart to GitHub
     runs-on: ubuntu-latest

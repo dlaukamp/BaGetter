@@ -1,0 +1,53 @@
+name: Release win-x64
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to publish, including the leading v (for example v1.7.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  win-x64:
+    name: Publish win-x64 and attach to the release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.sha }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Publish framework-dependent win-x64
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          $tag = $env:RELEASE_TAG
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            throw "No release tag was provided."
+          }
+          $version = $tag -replace '^v', ''
+          if ($version -notmatch '^\d+\.\d+\.\d+') {
+            throw "Tag '$tag' does not look like vX.Y.Z."
+          }
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          dotnet publish src/BaGetter/BaGetter.csproj -c Release -r win-x64 --self-contained false -o publish -p:Version=$version
+          Compress-Archive -Path publish\* -DestinationPath "BaGetter-$version-win-x64.zip"
+
+      - name: Attach the zip to the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          files: BaGetter-${{ env.VERSION }}-win-x64.zip
+          fail_on_unmatched_files: true
