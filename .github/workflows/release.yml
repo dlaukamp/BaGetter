@@ -59,13 +59,23 @@ jobs:
           echo ${{ github.sha }} > artifacts/ReleaseSha.txt
           7z a -tzip bagetter-${{ needs.version.outputs.RELEASE_VERSION }}.zip ./artifacts/*
       - name: Generate changelog with git-cliff
+        id: changelog
+        continue-on-error: true
         uses: tj-actions/git-cliff@v2.2.0
         with:
           args: --latest --strip all
           output: "CHANGELOG.md"
+      - name: Fallback changelog
+        if: steps.changelog.outcome != 'success'
+        run: |
+          echo "# ${{ needs.version.outputs.RELEASE_VERSION }}" > CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "Release ${{ github.ref_name }}." >> CHANGELOG.md
       - name: Create release with ncipollo/release-action
         uses: ncipollo/release-action@v1.14.0
         with:
+          allowUpdates: true
+          replacesArtifacts: false
           bodyFile: "CHANGELOG.md"
           artifacts: "bagetter-${{ needs.version.outputs.RELEASE_VERSION }}.zip"
           name: ${{ needs.version.outputs.RELEASE_VERSION }}
@@ -89,7 +99,14 @@ jobs:
           echo "PackageSource=${PackageSource}" >> $GITHUB_ENV
           dotnet pack --configuration Release --output artifacts --property:Version=${{ needs.version.outputs.RELEASE_VERSION }}
       - name: Push
-        run: dotnet nuget push "*" -s ${PackageSource} -k ${{secrets.NUGET_API_KEY}}
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          if [ -z "$NUGET_API_KEY" ]; then
+            echo "NUGET_API_KEY is not set; skipping nuget.org push."
+            exit 0
+          fi
+          dotnet nuget push "*" -s "$PackageSource" -k "$NUGET_API_KEY"
         working-directory: artifacts
 
   release_docker_image:
@@ -99,7 +116,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4.1.1
+      - name: Check Docker Hub credentials
+        id: dockerhub
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Docker Hub credentials are not set; the image will be built and not pushed."
+          fi
       - name: Login to Docker Hub
+        if: steps.dockerhub.outputs.enabled == 'true'
         uses: docker/login-action@v3.0.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -109,13 +139,13 @@ jobs:
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
       - name: Build and push Docker image
         uses: docker/build-push-action@v5.1.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: true
+          push: ${{ steps.dockerhub.outputs.enabled == 'true' }}
           tags: |
             bagetter/bagetter:latest
             bagetter/bagetter:${{ needs.version.outputs.RELEASE_VERSION }}
@@ -125,7 +155,7 @@ jobs:
             Version=${{ needs.version.outputs.RELEASE_VERSION }}
 
   release_helm_chart:
-    if: ${{ github.ref_type == 'tag' }}
+    if: ${{ github.ref_type == 'tag' && github.repository == 'bagetter/BaGetter' }}
     needs: [version, verify]
     name: Release Helm chart to GitHub
     runs-on: ubuntu-latest
