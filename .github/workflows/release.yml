@@ -71,6 +71,21 @@ jobs:
           echo "# ${{ needs.version.outputs.RELEASE_VERSION }}" > CHANGELOG.md
           echo "" >> CHANGELOG.md
           echo "Release ${{ github.ref_name }}." >> CHANGELOG.md
+      - name: Limit changelog length
+        run: |
+          # GitHub rejects a release body longer than 125000 characters.
+          # The first tag on this fork has no previous tag, so git-cliff emits the whole history.
+          max=100000
+          if [ ! -s CHANGELOG.md ]; then
+            echo "# ${{ needs.version.outputs.RELEASE_VERSION }}" > CHANGELOG.md
+            echo "Release ${{ github.ref_name }}." >> CHANGELOG.md
+          fi
+          size=$(wc -c < CHANGELOG.md)
+          if [ "$size" -gt "$max" ]; then
+            head -c "$max" CHANGELOG.md > CHANGELOG.trimmed.md
+            printf '\n\nChangelog truncated to fit the GitHub release body limit.\n' >> CHANGELOG.trimmed.md
+            mv CHANGELOG.trimmed.md CHANGELOG.md
+          fi
       - name: Create release with ncipollo/release-action
         uses: ncipollo/release-action@v1.14.0
         with:
