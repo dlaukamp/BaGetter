@@ -7,3 +7,10 @@ on:
         description: 'Tags'
         required: true
         type: string
+
+jobs:
+  notice:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Helm publishing lives in the tag release workflow
+        run: echo "Tag-triggered Helm publishing is release.yml and runs only for bagetter/BaGetter."

@@ -99,8 +99,14 @@ jobs:
           echo "PackageSource=${PackageSource}" >> $GITHUB_ENV
           dotnet pack --configuration Release --output artifacts --property:Version=${{ needs.version.outputs.RELEASE_VERSION }}
       - name: Push
-        if: ${{ secrets.NUGET_API_KEY != '' }}
-        run: dotnet nuget push "*" -s ${PackageSource} -k ${{secrets.NUGET_API_KEY}}
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          if [ -z "$NUGET_API_KEY" ]; then
+            echo "NUGET_API_KEY is not set; skipping nuget.org push."
+            exit 0
+          fi
+          dotnet nuget push "*" -s "$PackageSource" -k "$NUGET_API_KEY"
         working-directory: artifacts
 
   release_docker_image:
@@ -110,9 +116,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4.1.1
+      - name: Check Docker Hub credentials
+        id: dockerhub
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Docker Hub credentials are not set; the image will be built and not pushed."
+          fi
       - name: Login to Docker Hub
-        id: dockerhub-login
-        if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+        if: steps.dockerhub.outputs.enabled == 'true'
         uses: docker/login-action@v3.0.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -122,13 +139,13 @@ jobs:
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
       - name: Build and push Docker image
         uses: docker/build-push-action@v5.1.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: ${{ steps.dockerhub-login.outcome == 'success' }}
+          push: ${{ steps.dockerhub.outputs.enabled == 'true' }}
           tags: |
             bagetter/bagetter:latest
             bagetter/bagetter:${{ needs.version.outputs.RELEASE_VERSION }}
